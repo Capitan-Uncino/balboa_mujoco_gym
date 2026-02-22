@@ -5,11 +5,16 @@
   <default>
     <geom friction="0.8 0.005 0.0001" margin="0.001"/>
     <joint damping="0.0"/> 
-  </default>
+  </default> 
+
+  <asset>
+      <texture name="grid" type="2d" builtin="checker" rgb1=".1 .2 .3" rgb2=".2 .3 .4" width="800" height="800" mark="edge" markrgb=".1 .1 .1"/>
+      <material name="grid" texture="grid" texrepeat="1 1" texuniform="true"/>
+  </asset>
 
   <worldbody>
     <light directional="true" diffuse="0.8 0.8 0.8" pos="0 0 10" dir="0 0 -1"/>
-    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.2 0.2 0.2 1"/>
+    <geom name="floor" type="plane" size="0 0 .05" material="grid" condim="3"/>
 
     <body name="balboa_base" pos="0 0 0.04"> 
       
