@@ -51,7 +51,7 @@ print("B Matrix:\n", np.round(B_lab, 2))
 
 
 Q = np.diag([1.0, 100.0, 1.0, 10.0]) 
-R = np.array([[300.0]])
+R = np.array([[10.0]])
 
 P = scipy.linalg.solve_continuous_are(A_lab, B_lab, Q, R)
 K = np.linalg.inv(R) @ B_lab.T @ P
@@ -84,15 +84,15 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         
         # Split torque exactly as calculated. NO minus sign here!
         tau_per_motor = tau_total[0] / 2.0
-        
+
         # Saturate to realistic motor limits (0.1 Nm)
         tau_per_motor = np.clip(tau_per_motor, -0.1, 0.1)
         
         data.ctrl[0] = tau_per_motor
         data.ctrl[1] = tau_per_motor 
 
-        if int(data.time)>0 and int(data.time) % 3 == 0 and (data.time % 1.0) < 0.1:
-            data.xfrc_applied[1, 4] = 0.05 
+        if data.time == 0 and (data.time % 1.0) < 0.1:
+            data.xfrc_applied[1, 4] = 0.1 
         else:
             data.xfrc_applied[1, 4] = 0.0
 
