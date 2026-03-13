@@ -3,7 +3,7 @@ import numpy as np
 import scipy.linalg
 import mujoco
 import mujoco.viewer
-
+from collections import deque
 # If you add a Raspberry Pi increase `mp` and `l` here
 
 mw = 0.0042      # Mass of the wheels
@@ -51,7 +51,7 @@ print("B Matrix:\n", np.round(B_lab, 2))
 
 
 Q = np.diag([1.0, 100.0, 1.0, 10.0]) 
-R = np.array([[10.0]])
+R = np.array([[30.0]])
 
 P = scipy.linalg.solve_continuous_are(A_lab, B_lab, Q, R)
 K = np.linalg.inv(R) @ B_lab.T @ P
@@ -60,6 +60,11 @@ print("\nCalculated LQR Gains (K):", K)
 
 model = mujoco.MjModel.from_xml_path("balboa.xml")
 data = mujoco.MjData(model)
+
+# --- Buffer Configuration ---
+k_delay = 20  # Set your desired delay (number of timesteps)
+# Initialize buffer with zeros so the robot starts with no torque
+torque_buffer = deque([0.0] * k_delay, maxlen=k_delay)
 
 print("\nStarting Simulation... (Using Analytical LQR)")
 with mujoco.viewer.launch_passive(model, data) as viewer:
@@ -86,13 +91,17 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         tau_per_motor = tau_total[0] / 2.0
 
         # Saturate to realistic motor limits (0.1 Nm)
-        tau_per_motor = np.clip(tau_per_motor, -0.1, 0.1)
+        tau_per_motor = np.clip(tau_per_motor, -0.1, 0.1) 
+
+        # Buffer Logic: Add new torque, retrieve delayed torque
+        torque_buffer.append(tau_per_motor)
+        delayed_tau = torque_buffer.popleft()
         
-        data.ctrl[0] = tau_per_motor
-        data.ctrl[1] = tau_per_motor 
+        data.ctrl[0] = delayed_tau
+        data.ctrl[1] = delayed_tau
 
         if data.time == 0 and (data.time % 1.0) < 0.1:
-            data.xfrc_applied[1, 4] = 0.1 
+            data.xfrc_applied[1, 4] = 0.2 
         else:
             data.xfrc_applied[1, 4] = 0.0
 
