@@ -4,6 +4,8 @@ import scipy.linalg
 import mujoco
 import mujoco.viewer
 
+from collections import deque
+
 # If you add a Raspberry Pi increase `mp` and `l` here
 
 mw = 0.0042      # Mass of the wheels
@@ -61,51 +63,71 @@ print("\nCalculated LQR Gains (K):", K)
 model = mujoco.MjModel.from_xml_path("balboa.xml")
 data = mujoco.MjData(model)
 
-print("\nStarting Simulation... (Using Analytical LQR)")
+
+# --- Leonardo Specific Constraints ---
+CONTROL_FREQ = 100.0  # Hz (Realistic for Leonardo + I2C IMU)
+PWM_RES = 255         # 8-bit PWM resolution
+# --- Hardware Reality Settings ---
+MAX_TORQUE_L = 0.100  
+MAX_TORQUE_R = 0.100  
+MAX_SPEED = 25.0      # rad/s (Back-EMF limit)
+
+# --- Setup Buffer and Counters ---
+k_delay = 6  # Physical/Comm delay
+torque_buffer = deque([(0.0, 0.0)] * k_delay, maxlen=k_delay)
+step_counter = 0
+steps_per_ctrl = int((1.0 / CONTROL_FREQ) / model.opt.timestep)
+applied_tau = 0.0
+
+
 with mujoco.viewer.launch_passive(model, data) as viewer:
     while viewer.is_running():
         step_start = time.time()
 
-        # 1. Read Quaternions and convert to Pitch (Theta)
-        qw = data.qpos[3]
-        qy = data.qpos[5]
-        
-        theta = 2.0 * np.arctan2(qy, qw) 
-        dtheta = data.qvel[4]
-        
-        # 2. Read Wheels (Phi)
-        phi = (data.qpos[7] + data.qpos[8]) / 2.0
-        dphi = (data.qvel[6] + data.qvel[7]) / 2.0
 
-        # 3. Create State Vector [phi, theta, dphi, dtheta]
-        x = np.array([phi, theta, dphi, dtheta])
+        # Run the "Arduino" loop only at its sample rate
+        if step_counter % steps_per_ctrl == 0:
+            
+            # 1. Simulate IMU/Encoder Jitter
+            # Leonardo's 10-bit ADC or I2C noise is significant
+            theta_noisy = (2.0 * np.arctan2(data.qpos[5], data.qpos[3])) + np.random.normal(0, 0.005)
+            dtheta_noisy = data.qvel[4] + np.random.normal(0, 0.02)
+            phi_noisy = ((data.qpos[7] + data.qpos[8]) / 2.0) + np.random.normal(0, 0.002)
+            dphi_noisy = ((data.qvel[6] + data.qvel[7]) / 2.0) + np.random.normal(0, 0.01)
 
-        tau_total = -K @ x
-        
-        # Split torque exactly as calculated. NO minus sign here!
-        tau_per_motor = tau_total[0] / 2.0
-        
-        # Saturate to realistic motor limits (0.1 Nm)
-        tau_per_motor = np.clip(tau_per_motor, -0.1, 0.1)
-        
-        data.ctrl[0] = tau_per_motor
-        data.ctrl[1] = tau_per_motor 
+            # 2. State Vector
+            x = np.array([phi_noisy, theta_noisy, dphi_noisy, dtheta_noisy])
 
-        if int(data.time)>0 and int(data.time) % 3 == 0 and (data.time % 1.0) < 0.1:
-            data.xfrc_applied[1, 4] = 0.05 
-        else:
-            data.xfrc_applied[1, 4] = 0.0
+            # 3. LQR Calculation
+            tau_total = -K @ x
+            raw_tau = tau_total[0]/2
 
+                    # 3. Apply DC Motor Curve (Torque drops as speed increases)
+            # This prevents the "infinite save" at high speeds
+            w_l, w_r = data.qvel[6], data.qvel[7]
+            avail_l = MAX_TORQUE_L * max(0.0, 1.0 - (abs(w_l) / MAX_SPEED))
+            avail_r = MAX_TORQUE_R * max(0.0, 1.0 - (abs(w_r) / MAX_SPEED))
+
+            # 4. Clip to DIFFERENT limits
+            tau_l = np.clip(raw_tau, -avail_l, avail_l)
+            tau_r = np.clip(raw_tau, -avail_r, avail_r)
+
+            # 5. Push through the Leonardo Delay Buffer
+            torque_buffer.append((tau_l, tau_r))
+            applied_tau_l, applied_tau_r = torque_buffer.popleft()
+
+        # Apply to motors
+        data.ctrl[0] = applied_tau_l
+        data.ctrl[1] = applied_tau_r
         mujoco.mj_step(model, data)
+        step_counter += 1
         viewer.sync()
 
-        # Real-time pacing
+        # Pacing
+
         elapsed = time.time() - step_start
         if model.opt.timestep > elapsed:
             time.sleep(model.opt.timestep - elapsed)
-
-
-
 
 
 
