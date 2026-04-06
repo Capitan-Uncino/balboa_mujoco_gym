@@ -5,7 +5,9 @@ pkgs.mkShell {
     (pkgs.python3.withPackages (python-pkgs: [
       python-pkgs.mujoco
       python-pkgs.numpy 
-      python-pkgs.scipy
+      python-pkgs.scipy 
+      python-pkgs.gymnasium
+      python-pkgs.stable-baselines3
     ]))
     pkgs.libdecor      
   ];
