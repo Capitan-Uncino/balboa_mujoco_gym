@@ -73,7 +73,7 @@ MAX_TORQUE_R = 0.100
 MAX_SPEED = 25.0      # rad/s (Back-EMF limit)
 
 # --- Setup Buffer and Counters ---
-k_delay = 6  # Physical/Comm delay
+k_delay = 2  # Physical/Comm delay
 torque_buffer = deque([(0.0, 0.0)] * k_delay, maxlen=k_delay)
 step_counter = 0
 steps_per_ctrl = int((1.0 / CONTROL_FREQ) / model.opt.timestep)
