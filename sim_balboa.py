@@ -79,6 +79,38 @@ step_counter = 0
 steps_per_ctrl = int((1.0 / CONTROL_FREQ) / model.opt.timestep)
 applied_tau = 0.0
 
+import math
+import random
+
+# Global state
+last_noise = 0.0
+THETA_OU = 0.30
+SIGMA_OU = 0.80
+
+def generate_gaussian():
+    # Generate two uniform random variables between 0 and 1
+    # random.uniform(0.0001, 1.0) ensures we strictly avoid log(0)
+    u1 = random.uniform(0.0001, 1.0) 
+    u2 = random.random()
+
+    # Box-Muller transform calculation
+    z0 = math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2)
+    
+    return z0
+
+def generate_exploration_noise():
+    global last_noise
+    
+    # 1. Get the true Gaussian noise
+    epsilon = generate_gaussian()
+    
+    # 2. OU Process formula: dx = theta * (-x) * dt + sigma * dW
+    # dt = 0.01, and sqrt(dt) = 0.1
+    dx = THETA_OU * (-last_noise) * 0.01 + SIGMA_OU * epsilon * 0.1
+    last_noise += dx
+    
+    return last_noise
+
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     while viewer.is_running():
@@ -99,8 +131,8 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
             x = np.array([phi_noisy, theta_noisy, dphi_noisy, dtheta_noisy])
 
             # 3. LQR Calculation
-            tau_total = -K @ x
-            raw_tau = tau_total[0]/2
+            tau_total = -K @ x + generate_exploration_noise()
+            raw_tau = tau_total[0]/2 
 
                     # 3. Apply DC Motor Curve (Torque drops as speed increases)
             # This prevents the "infinite save" at high speeds
