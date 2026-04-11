@@ -52,7 +52,7 @@ print("A Matrix:\n", np.round(A_lab, 2))
 print("B Matrix:\n", np.round(B_lab, 2))
 
 
-Q = np.diag([1.0, 100.0, 1.0, 10.0]) 
+Q = np.diag([10.0, 100.0, 1.0, 10.0]) 
 R = np.array([[300.0]])
 
 P = scipy.linalg.solve_continuous_are(A_lab, B_lab, Q, R)
