@@ -8,29 +8,20 @@ from collections import deque
 
 # If you add a Raspberry Pi increase `mp` and `l` here
 
-mw = 0.0042      # Mass of the wheels
-mp = 0.316       # Mass of the pendulum (Change this when you add the Pi!)
-r = 0.040        # Wheel radius
-l = 0.023        # Distance to CoM (Change this when you add the Pi!)
-Ip = 444.43e-6   # Inertia of pendulum
-Iw = 26.89e-6    # Inertia of wheels
+mw = 0.0042  # Mass of the wheels
+mp = 0.316  # Mass of the pendulum (Change this when you add the Pi!)
+r = 0.040  # Wheel radius
+l = 0.023  # Distance to CoM (Change this when you add the Pi!)
+Ip = 444.43e-6  # Inertia of pendulum
+Iw = 26.89e-6  # Inertia of wheels
 g = 9.81
 
 # Construct E, G, F Matrices
-E = np.array([
-    [Iw + (r**2)*(mw + mp), mp * r * l],
-    [mp * r * l,            Ip + mp * (l**2)]
-])
+E = np.array([[Iw + (r**2) * (mw + mp), mp * r * l], [mp * r * l, Ip + mp * (l**2)]])
 
-G = np.array([
-    [0],
-    [-mp * g * l]
-])
+G = np.array([[0], [-mp * g * l]])
 
-F = np.array([
-    [1],
-    [0]
-])
+F = np.array([[1], [0]])
 
 # Calculate A and B
 E_inv = np.linalg.inv(E)
@@ -52,7 +43,7 @@ print("A Matrix:\n", np.round(A_lab, 2))
 print("B Matrix:\n", np.round(B_lab, 2))
 
 
-Q = np.diag([10.0, 100.0, 1.0, 10.0]) 
+Q = np.diag([10.0, 100.0, 1.0, 10.0])
 R = np.array([[300.0]])
 
 P = scipy.linalg.solve_continuous_are(A_lab, B_lab, Q, R)
@@ -66,68 +57,89 @@ data = mujoco.MjData(model)
 
 # --- Leonardo Specific Constraints ---
 CONTROL_FREQ = 100.0  # Hz (Realistic for Leonardo + I2C IMU)
-PWM_RES = 255         # 8-bit PWM resolution
+PWM_RES = 255  # 8-bit PWM resolution
 # --- Hardware Reality Settings ---
-MAX_TORQUE_L = 0.100  
-MAX_TORQUE_R = 0.100  
-MAX_SPEED = 25.0      # rad/s (Back-EMF limit)
+MAX_TORQUE_L = 0.100
+MAX_TORQUE_R = 0.100
+MAX_SPEED = 25.0  # rad/s (Back-EMF limit)
 
-# --- Setup Buffer and Counters ---
-k_delay = 2  # Physical/Comm delay
-torque_buffer = deque([(0.0, 0.0)] * k_delay, maxlen=k_delay)
+# Start small (0.01 - 0.5). If too high, the robot will oscillate/wag its tail.
+K_HEADING = 0.02
+
+
+# 1440 ticks per revolution (12 CPR encoder * 120 gear ratio)
+TICKS_PER_REV = 1440.0
+RAD_PER_TICK = (2.0 * np.pi) / TICKS_PER_REV  # Approx 0.00436 radians per tick
+
+# --- Setup Counters ---
 step_counter = 0
 steps_per_ctrl = int((1.0 / CONTROL_FREQ) / model.opt.timestep)
-applied_tau = 0.0
 
+# Initialize control variables to zero
+tau_l, tau_r = 0.0, 0.0
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     while viewer.is_running():
         step_start = time.time()
 
-
-        # Run the "Arduino" loop only at its sample rate
+        # Run the "Arduino" loop only at its sample rate (100Hz)
         if step_counter % steps_per_ctrl == 0:
-            
-            # 1. Simulate IMU/Encoder Jitter
-            # Leonardo's 10-bit ADC or I2C noise is significant
-            theta_noisy = (2.0 * np.arctan2(data.qpos[5], data.qpos[3])) + np.random.normal(0, 0.005)
+            # 1. Read Raw Encoders (and add noise)
+            # data.qpos[7/8] are the motor shaft joints in the backlash model
+            # 1. Read Encoders with strict digital quantization (No Gaussian noise!)
+            phi_l_raw = data.qpos[7]
+            phi_r_raw = data.qpos[8]
+
+            # Round the true position to the nearest physical encoder tick
+            phi_l = np.round(phi_l_raw / RAD_PER_TICK) * RAD_PER_TICK
+            phi_r = np.round(phi_r_raw / RAD_PER_TICK) * RAD_PER_TICK
+
+            # 2. State Vector for LQR
+            # Theta (Pitch Angle) comes from a Complementary/Kalman Filter.
+            # It is a smoothed floating-point math result, so it doesn't "stair-step"
+            # like a digital encoder. A tiny Gaussian fuzz is okay here to simulate floor vibrations.
+            theta_raw = 2.0 * np.arctan2(data.qpos[5], data.qpos[3])
+            theta_noisy = theta_raw + np.random.normal(0, 0.001)  # Reduced from 0.005
+
+            # 3. Velocities (Keeping Gaussian noise is mathematically correct here)
             dtheta_noisy = data.qvel[4] + np.random.normal(0, 0.02)
-            phi_noisy = ((data.qpos[7] + data.qpos[8]) / 2.0) + np.random.normal(0, 0.002)
-            dphi_noisy = ((data.qvel[6] + data.qvel[7]) / 2.0) + np.random.normal(0, 0.01)
 
-            # 2. State Vector
-            x = np.array([phi_noisy, theta_noisy, dphi_noisy, dtheta_noisy])
+            phi_avg = (phi_l + phi_r) / 2.0
+            dphi_avg = ((data.qvel[6] + data.qvel[7]) / 2.0) + np.random.normal(0, 0.01)
 
-            # 3. LQR Calculation
+            x = np.array([phi_avg, theta_noisy, dphi_avg, dtheta_noisy])
+
+            # 3. Calculate Base LQR Torque
             tau_total = -K @ x
-            raw_tau = tau_total[0]/2
+            raw_tau = tau_total[0] / 2  # Balance torque split per wheel
 
-                    # 3. Apply DC Motor Curve (Torque drops as speed increases)
-            # This prevents the "infinite save" at high speeds
+            # 4. Heading Correction (Arduino-style)
+            phi_diff = phi_l - phi_r
+            tau_corr = K_HEADING * phi_diff
+
+            # 5. Combine Control and Apply Motor Curve
+            total_l = raw_tau - tau_corr
+            total_r = raw_tau + tau_corr
+
+            # Back-EMF constraints using motor shaft velocities
             w_l, w_r = data.qvel[6], data.qvel[7]
             avail_l = MAX_TORQUE_L * max(0.0, 1.0 - (abs(w_l) / MAX_SPEED))
             avail_r = MAX_TORQUE_R * max(0.0, 1.0 - (abs(w_r) / MAX_SPEED))
 
-            # 4. Clip to DIFFERENT limits
-            tau_l = np.clip(raw_tau, -avail_l, avail_l)
-            tau_r = np.clip(raw_tau, -avail_r, avail_r)
+            # Final clipping
+            tau_l = np.clip(total_l, -avail_l, avail_l)
+            tau_r = np.clip(total_r, -avail_r, avail_r)
 
-            # 5. Push through the Leonardo Delay Buffer
-            torque_buffer.append((tau_l, tau_r))
-            applied_tau_l, applied_tau_r = torque_buffer.popleft()
+        # 6. Apply Directly to Motors
+        # MuJoCo's dyntype="filter" in the XML now handles the lag
+        data.ctrl[0] = tau_l
+        data.ctrl[1] = tau_r
 
-        # Apply to motors
-        data.ctrl[0] = applied_tau_l
-        data.ctrl[1] = applied_tau_r
         mujoco.mj_step(model, data)
         step_counter += 1
         viewer.sync()
 
-        # Pacing
-
+        # Real-time pacing
         elapsed = time.time() - step_start
         if model.opt.timestep > elapsed:
             time.sleep(model.opt.timestep - elapsed)
-
-
-
