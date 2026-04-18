@@ -64,7 +64,7 @@ MAX_TORQUE_R = 0.100
 MAX_SPEED = 25.0  # rad/s (Back-EMF limit)
 
 # Start small (0.01 - 0.5). If too high, the robot will oscillate/wag its tail.
-K_HEADING = 0.02
+K_HEADING = 0
 
 
 # 1440 ticks per revolution (12 CPR encoder * 120 gear ratio)
